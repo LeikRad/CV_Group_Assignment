@@ -1,15 +1,57 @@
 import pygame as pg
-import pygame.mouse
 from pygame.locals import *
 import numpy as np
-import asyncio
-import websockets
-import threading
 from OpenGL.GL import *
 from OpenGL.GL.shaders import compileProgram, compileShader
 
+from .shape import Shape
+
 WEBSOCKET_HOST = "localhost"
 WEBSOCKET_PORT = 8765
+
+# Define the red sphere properties
+shapes = [
+    Shape(
+        position=np.array([0.0, 0.0, 0.0], dtype=np.float32),
+        size=np.array([1.0, 1.0, 1.0], dtype=np.float32),
+        colour=np.array([1.0, 0.0, 0.0], dtype=np.float32),
+        shapeType=0,
+        operation=0,
+        blendStrength=1.0,
+        numChildren=0,
+    )
+    for _ in range(10)
+]
+
+shapes_block = np.array(
+    [
+        (
+            shape.position,
+            0.0,  # Padding to align to 16 bytes
+            shape.size,
+            0.0,  # Padding to align to 16 bytes
+            shape.colour,
+            0.0,  # Padding to align to 16 bytes
+            shape.shapeType,
+            shape.operation,
+            shape.blendStrength,
+            shape.numChildren,
+        )
+        for shape in shapes
+    ],
+    dtype=[
+        ("position", np.float32, 3),
+        ("_pad1", np.float32),  # Padding to align to 16 bytes
+        ("size", np.float32, 3),
+        ("_pad2", np.float32),  # Padding to align to 16 bytes
+        ("colour", np.float32, 3),
+        ("_pad3", np.float32),  # Padding to align to 16 bytes
+        ("shapeType", np.int32),
+        ("operation", np.int32),
+        ("blendStrength", np.float32),
+        ("numChildren", np.int32),
+    ],
+)
 
 
 class Window:
@@ -28,6 +70,8 @@ class Window:
 
         # Shader stuff
         self.resolution_location = None
+        self.numShapes = 0
+        self.shapesNumber_location = None
 
         # Camera stuff
         self.camera_position = [0.0, 1.0, 0.0]  # Posição inicial da câmera
@@ -37,7 +81,6 @@ class Window:
 
         # Blending strength (thread-safe)
         self.blend_strength = 2.0
-        self.lock = threading.Lock()  # Para sincronização segura
 
     def create_window(self) -> None:
         pg.init()
@@ -93,6 +136,21 @@ class Window:
         self.blend_strength_location = glGetUniformLocation(
             self.program, "u_blend_strength"
         )
+
+        self.shapesNumber_location = glGetUniformLocation(self.program, "numShapes")
+        self.numShapes = 10
+
+        ubo = glGenBuffers(1)
+        glBindBuffer(GL_UNIFORM_BUFFER, ubo)
+        glBufferData(
+            GL_UNIFORM_BUFFER, shapes_block.nbytes, shapes_block, GL_STATIC_DRAW
+        )
+        glBindBufferBase(GL_UNIFORM_BUFFER, 0, ubo)
+
+        block_index = glGetUniformBlockIndex(self.program, "ShapesBlock")
+        glUniformBlockBinding(self.program, block_index, 0)
+
+        glUniform1i(self.shapesNumber_location, self.numShapes)
         glUniform1f(self.blend_strength_location, self.blend_strength)
 
     def _read_shader(self, path: str) -> str:
@@ -198,10 +256,6 @@ class Window:
             current_time = pg.time.get_ticks() / 1000.0
             glUniform1f(self.time_location, current_time)
 
-            # Atualiza a força de blending com thread-safe lock
-            with self.lock:
-                glUniform1f(self.blend_strength_location, self.blend_strength)
-
             # OpenGL stuff
             glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT)
 
@@ -215,27 +269,28 @@ class Window:
             self.clock.tick(self.max_fps)
 
     def run(self):
-        threading.Thread(target=self.start_websocket_server, daemon=True).start()
+        # threading.Thread(target=self.start_websocket_server, daemon=True).start()
         self.render_loop()
 
-    def start_websocket_server(self):
-        asyncio.run(self.run_server())
-
-    async def websocket_handler(self, websocket):
-        async for message in websocket:
-            try:
-                command, value = message.split(":")
-                if command == "change_blend_strength":
-                    new_blend_strength = float(value)
-
-                    with self.lock:
-                        self.blend_strength = new_blend_strength
-            except ValueError:
-                print(f"Invalid blend strength received: {message}")
-
-    async def run_server(self):
-        server = await websockets.serve(
-            self.websocket_handler, WEBSOCKET_HOST, WEBSOCKET_PORT
-        )
-        print(f"WebSocket server started at ws://{WEBSOCKET_HOST}:{WEBSOCKET_PORT}")
-        await server.wait_closed()
+    #
+    # def start_websocket_server(self):
+    #     asyncio.run(self.run_server())
+    #
+    # async def websocket_handler(self, websocket):
+    #     async for message in websocket:
+    #         try:
+    #             command, value = message.split(":")
+    #             if command == "change_blend_strength":
+    #                 new_blend_strength = float(value)
+    #
+    #                 with self.lock:
+    #                     self.blend_strength = new_blend_strength
+    #         except ValueError:
+    #             print(f"Invalid blend strength received: {message}")
+    #
+    # async def run_server(self):
+    #     server = await websockets.serve(
+    #         self.websocket_handler, WEBSOCKET_HOST, WEBSOCKET_PORT
+    #     )
+    #     print(f"WebSocket server started at ws://{WEBSOCKET_HOST}:{WEBSOCKET_PORT}")
+    #     await server.wait_closed()

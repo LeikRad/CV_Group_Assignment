@@ -1,4 +1,3 @@
-from dsf import Sphere, Cube
 from lib import Window
 
 
